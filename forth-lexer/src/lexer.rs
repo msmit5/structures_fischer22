@@ -1,6 +1,7 @@
 use std::{fs::File,path::Path, io::{prelude::*, BufReader, Error}, collections::hash_map};
 
 
+#[derive(Debug, PartialEq)]
 pub enum TokenType {
     Strn,
     Nmbr,
@@ -11,7 +12,7 @@ pub enum TokenType {
 pub enum LexerError {
     FileError(std::io::Error),
 }
-
+#[derive(Debug)]
 pub struct Token{
     token_type: TokenType,
     value: String,
@@ -25,15 +26,20 @@ pub struct Lexer {
     file_hnd: File,
     //token_list: Vec<Token>,
     token_list: std::collections::HashMap<String, Token>,
+    state: LexerState,
+    cur_char: [u8; 1]
 }
 
+#[derive(PartialEq)]
 enum LexerState {
     StartState,
     SlashPending,
+    ParenPending,
     AcquiringSlash,
     AcquiringParen,
     AcquiringToken,
     AcquiringString,
+    Done,
 }
 
 impl Lexer {
@@ -50,45 +56,159 @@ impl Lexer {
             file_path: p,
             file_hnd: fi,
             //token_list: Vec::new()
-            token_list: std::collections::HashMap::new()
+            token_list: std::collections::HashMap::new(),
+            state: LexerState::StartState,
+            cur_char: [255_u8]
         })
     }
 
     pub fn do_lex(&mut self) {
-        let mut token_state: LexerState = LexerState::StartState;
-        
-        let mut c1: [u8; 1] = [0];
-        let mut c2: u8 = 0;
+        self.state = LexerState::StartState; 
 
-        while self.file_hnd.read(&mut c1[..]).unwrap() > 0{
-            println!("{}:{};", c1[0], c1[0] as char);
+        while self.file_hnd.read(&mut self.cur_char[..]).unwrap() > 0{
+            //println!("{}:{};", self.cur_char[0], self.cur_char[0] as char);
             
-            match token_state{
-                LexerState::StartState => eprintln!("Start State!"),
-                LexerState::SlashPending => eprintln!("SlashPending"),
-                LexerState::AcquiringSlash => eprintln!("Acquiring"),
-                LexerState::AcquiringParen => eprintln!("AcquiringParen"),
-                LexerState::AcquiringToken => eprintln!("AcquiringToken"),
-                LexerState::AcquiringString => eprint!("Acquiring String"),
-                
+            match self.state {
+                LexerState::StartState      => self.do_start(),
+                LexerState::SlashPending    => self.slash_pending(),
+                LexerState::ParenPending    => self.paren_pending(),
+                LexerState::AcquiringSlash  => self.acquiring_slash(),
+                LexerState::AcquiringParen  => self.acquiring_paren(),
+                LexerState::AcquiringToken  => self.acquiring_token(),
+                LexerState::AcquiringString => self.acquiring_token(), // filtering out the `"` after
+                LexerState::Done            => return,
             }
-
-            c2 = c1[0];
         }
-
     }
 
-    pub fn doStart(&mut self) {
-
+    fn slash_pending(&mut self) {
+        if self.cur_char[0] == 0x20_u8{
+            self.state = LexerState::AcquiringSlash;
+        } else {
+            self.state = LexerState::AcquiringToken;
+        }
+    }
+    
+    fn paren_pending(&mut self) {
+        if self.cur_char[0] == 0x20_u8{
+            self.state = LexerState::AcquiringParen;
+        } else {
+            self.state = LexerState::AcquiringToken;
+        }
     }
 
-    pub fn doToken(&mut self) {
+    fn acquiring_slash(&mut self) {
+        while self.cur_char[0] != 0x0A_u8 {
+            match self.file_hnd.read(&mut self.cur_char[..]) {
+                Ok(a)  => {
+                    if a < 1 {
+                        self.state = LexerState::Done;
+                        return;
+                    }
+                },
+                Err(a) => {
+                    eprintln!("{:?}", a);
+                    panic!("fuck!");
+                }
+            }
+        }
+    }
 
+    fn acquiring_paren(&mut self) {
+        while self.cur_char[0] != 0x29_u8 {
+            match self.file_hnd.read(&mut self.cur_char[..]) {
+                Ok(a)  => {
+                    if a < 1 {
+                        self.state = LexerState::Done;
+                        return;
+                    }
+                },
+                Err(a) => {
+                    eprintln!("{:?}", a);
+                    panic!("fuck!");
+                }
+            }
+        }
+    }
+
+    fn acquiring_token(&mut self) {
+        let mut tkn = String::new();
+        while (self.cur_char[0] != 0x20_u8 && self.state != LexerState::AcquiringString) || (self.cur_char[0] != 0x22_u8 && self.state == LexerState::AcquiringString) {
+            // append to string used for token
+            tkn += std::str::from_utf8(&self.cur_char[..]).expect("Failed to find a char!");
+            match self.file_hnd.read(&mut self.cur_char[..]) {
+                Ok(a)  => {
+                    if a < 1 {
+                        self.state = LexerState::Done;
+                        return;
+                    }
+                },
+                Err(a) => {
+                    eprintln!("{:?}", a);
+                    panic!("fuck!");
+                }
+            }
+        }
+        
+        // Determine token type
+        if tkn.is_numeric() {
+            self.do_token(tkn, TokenType::Nmbr) 
+        }else if tkn.chars().nth(0).unwrap() == '.' {
+            // filter out the `"`s
+            let stl = tkn.len(); // Second To Last
+            self.do_token(String::from(&tkn[1..stl]), TokenType::Strn)
+        } else {
+            self.do_token(tkn, TokenType::Word) 
+        }
+    }
+
+    fn do_start(&mut self) {
+        match self.cur_char[0] {
+            // I am forced to use hex because of rust using utf8 instead of 
+            0x20_u8 => { // " "
+                // do nothing
+            },
+            0x55_u8 => { // "\"
+                self.state = LexerState::SlashPending;
+            },
+            0x28_u8 => {
+                self.state = LexerState::ParenPending;
+            },
+            _ => {
+                self.state = LexerState::AcquiringToken
+            }
+        }
+    } // end do_start
+
+    fn do_token(&mut self, s: String, t: TokenType) {
+        if self.token_list.contains_key(&s) {
+            let _old = self.token_list.get_mut(&s).unwrap();
+            _old.reference_count+=1;
+        } else {
+            self.token_list.insert(s.clone(), Token{token_type: t, value: s, reference_count: 1});
+        }
     }
 
     // we are not editing anything here, so we can just leave it as a normal self reference
     pub fn print(&self) {
+        println!("{:?}", self.token_list)
 
     }
+
 }
 
+
+trait IsNumeric {
+    fn is_numeric(&self) -> bool;
+}
+
+impl IsNumeric for String {
+    fn is_numeric(& self) -> bool {
+        for c in self.chars() {
+            if !c.is_numeric() {
+                return false;
+            }
+        }
+        return true;
+    }
+}
