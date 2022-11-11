@@ -30,7 +30,7 @@ pub struct Lexer {
     cur_char: [u8; 1]
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum LexerState {
     StartState,
     SlashPending,
@@ -65,6 +65,7 @@ impl Lexer {
     pub fn do_lex(&mut self) {
         self.state = LexerState::StartState; 
 
+        let mut prev = 0x00_u8;
         while self.file_hnd.read(&mut self.cur_char[..]).unwrap() > 0{
             //println!("{}:{};", self.cur_char[0], self.cur_char[0] as char);
             
@@ -74,10 +75,12 @@ impl Lexer {
                 LexerState::ParenPending    => self.paren_pending(),
                 LexerState::AcquiringSlash  => self.acquiring_slash(),
                 LexerState::AcquiringParen  => self.acquiring_paren(),
-                LexerState::AcquiringToken  => self.acquiring_token(),
-                LexerState::AcquiringString => self.acquiring_token(), // filtering out the `"` after
+                LexerState::AcquiringToken  => self.acquiring_token(prev),
+                LexerState::AcquiringString => self.acquiring_token(prev), // filtering out the `"` after
                 LexerState::Done            => return,
             }
+
+            prev= self.cur_char[0];
         }
     }
 
@@ -131,16 +134,29 @@ impl Lexer {
         }
     }
 
-    fn acquiring_token(&mut self) {
-        let mut tkn = String::new();
-        while (self.cur_char[0] != 0x20_u8 && self.state != LexerState::AcquiringString) || (self.cur_char[0] != 0x22_u8 && self.state == LexerState::AcquiringString) {
+    fn acquiring_token(&mut self, already_read: u8) {
+        // Because a character was already read, we need to take it into account before we read
+        // more. This is added to the tkn buffer.
+        let mut tkn = String::from(char::from(already_read));
+
+        if self.cur_char[0] == 0x22_u8 { self.state = LexerState::AcquiringString; }
+        while ((self.cur_char[0] != 0x20_u8 || self.cur_char[0] == 0x0A) && self.state != LexerState::AcquiringString) || (self.cur_char[0] != 0x22_u8 && self.state == LexerState::AcquiringString && tkn.len() > 1) {
+            eprint!("{}", self.cur_char[0] as char);
+            // handle the . token
+            if tkn.len() == 1 && self.state == LexerState::AcquiringString && self.cur_char[0] == 0x20_u8{
+                //tkn.push(char::from(0x2E));
+                break;
+            }
+
             // append to string used for token
             tkn += std::str::from_utf8(&self.cur_char[..]).expect("Failed to find a char!");
+
+            if tkn == String::from("Hello") { eprintln!("{:?}", self.state); }
+            // read from file and check for errors
             match self.file_hnd.read(&mut self.cur_char[..]) {
                 Ok(a)  => {
                     if a < 1 {
-                        self.state = LexerState::Done;
-                        return;
+                        break;
                     }
                 },
                 Err(a) => {
@@ -151,16 +167,36 @@ impl Lexer {
         }
         
         // Determine token type
-        if tkn.is_numeric() {
-            self.do_token(tkn, TokenType::Nmbr) 
-        }else if tkn.chars().nth(0).unwrap() == '.' {
-            // filter out the `"`s
+        eprintln!("Token:>{}<", tkn);
+        if tkn.len() == 0 {
+            return;
+        } else if self.state == LexerState::AcquiringString {
             let stl = tkn.len(); // Second To Last
-            self.do_token(String::from(&tkn[1..stl]), TokenType::Strn)
+            // One thing that I truly hate about rust is the constant String::froms I need to do :(
+            self.do_token(String::from(String::from(&tkn[1..stl]).trim()), TokenType::Strn)
+        } else if tkn.is_numeric() {
+            self.do_token(tkn, TokenType::Nmbr)
         } else {
-            self.do_token(tkn, TokenType::Word) 
+            self.do_token(String::from(tkn.trim()), TokenType::Word) 
         }
+        //} else if tkn.is_numeric() {
+            //self.do_token(tkn, TokenType::Nmbr) 
+        //} else if tkn.chars().nth(0).unwrap() == '.' {
+            //// filter out the `"`s
+            //let stl = tkn.len(); // Second To Last
+            //if stl == 1 {
+                //self.do_token(String::from(tkn.trim()), TokenType::Word);
+            //} else {
+                //// One thing that I truly hate about rust is the constant String::froms I need to
+                //// do :(
+                //self.do_token(String::from(String::from(&tkn[1..stl]).trim()), TokenType::Strn)
+            //}
+        //} else {
+            //self.do_token(String::from(tkn.trim()), TokenType::Word) 
+        //}
+        self.state = LexerState::StartState;
     }
+
 
     fn do_start(&mut self) {
         match self.cur_char[0] {
@@ -168,12 +204,18 @@ impl Lexer {
             0x20_u8 => { // " "
                 // do nothing
             },
+            0x0A_u8 => {
+                // do nothing
+            }
             0x55_u8 => { // "\"
                 self.state = LexerState::SlashPending;
             },
-            0x28_u8 => {
+            0x28_u8 => { // "("
                 self.state = LexerState::ParenPending;
             },
+            0x2E_u8 =>{ // "."
+                self.state = LexerState::AcquiringString;
+            }
             _ => {
                 self.state = LexerState::AcquiringToken
             }
@@ -181,6 +223,8 @@ impl Lexer {
     } // end do_start
 
     fn do_token(&mut self, s: String, t: TokenType) {
+        println!("Token found! {s}");
+            
         if self.token_list.contains_key(&s) {
             let _old = self.token_list.get_mut(&s).unwrap();
             _old.reference_count+=1;
@@ -191,7 +235,7 @@ impl Lexer {
 
     // we are not editing anything here, so we can just leave it as a normal self reference
     pub fn print(&self) {
-        println!("{:?}", self.token_list)
+        println!("{:#?}", self.token_list)
 
     }
 
