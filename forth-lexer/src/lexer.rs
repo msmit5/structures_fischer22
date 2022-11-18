@@ -66,6 +66,8 @@ impl Lexer {
         self.state = LexerState::StartState; 
 
         let mut prev = 0x00_u8;
+        self.cur_char[0] = 0x00_u8;
+        //loop{ 
         while self.file_hnd.read(&mut self.cur_char[..]).unwrap() > 0{
             //println!("{}:{};", self.cur_char[0], self.cur_char[0] as char);
             
@@ -76,10 +78,9 @@ impl Lexer {
                 LexerState::AcquiringSlash  => self.acquiring_slash(),
                 LexerState::AcquiringParen  => self.acquiring_paren(),
                 LexerState::AcquiringToken  => self.acquiring_token(prev),
-                LexerState::AcquiringString => self.acquiring_token(prev), // filtering out the `"` after
+                LexerState::AcquiringString => self.acquiring_string(prev),
                 LexerState::Done            => return,
             }
-
             prev= self.cur_char[0];
         }
     }
@@ -132,9 +133,103 @@ impl Lexer {
                 }
             }
         }
+        self.state = LexerState::StartState;
     }
 
+
     fn acquiring_token(&mut self, already_read: u8) {
+        let mut _tkn = String::new();
+        if already_read != 0x00_u8{
+            // Prepare to append the characters that were already read.
+            let _tmp = [already_read, self.cur_char[0]];
+            _tkn += std::str::from_utf8(&_tmp[..]).expect("invalid character");
+        }
+        
+        while self.cur_char[0] != 0x20_u8 && self.cur_char[0] != 0x0a_u8  {
+            match self.file_hnd.read(&mut self.cur_char[..]) {
+                Ok(0) => { // 0 bytes read if eof;
+                    self.do_token(_tkn, TokenType::Word);
+                    self.state = LexerState::Done;
+                    return;
+                }
+                Ok(1) => {
+                    _tkn += std::str::from_utf8(&self.cur_char[..]).expect("Invalid utf8 char");
+                }
+                Err(e) => {
+                    eprintln!("ERROR!\n{:?}",e);
+                    panic!("Encountered an error!");
+                }
+                _ => {
+                    panic!("Honestly, how did this read more than a byte when the buffer is one byte?");
+                }
+            } // match
+        } // while
+       
+        _tkn = String::from(_tkn.trim());
+        if _tkn.len() == 0 {
+            return;
+        } else if _tkn.eq(&String::from(".\"")) {
+            self.do_token(_tkn, TokenType::Word);
+            self.state = LexerState::AcquiringString;
+            return;
+        } else if _tkn.is_numeric() {
+            self.do_token(_tkn, TokenType::Nmbr);
+            self.state = LexerState::StartState;
+            return;
+        } else {
+            self.do_token(_tkn, TokenType::Word);
+            self.state = LexerState::StartState;
+            return;
+        }
+    }
+
+
+    fn acquiring_string(&mut self, already_read: u8){
+        let mut _tkn = String::new();
+        if already_read != 0x00_u8{
+            // Prepare to append the characters that were already read.
+            let _tmp = [already_read, self.cur_char[0]];
+            _tkn += std::str::from_utf8(&_tmp[..]).expect("invalid character");
+        }
+        if already_read != 0x20_u8 && already_read != 0x00_u8{
+            println!("already read: {already_read}");
+            //_tkn += std::str::from_utf8(&self.cur_char[..]).expect("Invalid utf8 char");
+            let mut _tkn = String::from(char::from(already_read));
+        }
+        while self.cur_char[0] != 0x22_u8 {
+            match self.file_hnd.read(&mut self.cur_char[..]) {
+                Ok(0) => {
+                    self.do_token(_tkn, TokenType::Word);
+                    self.state = LexerState::Done;
+                    return;
+                }
+                Ok(1) => {
+                    // Ignore closing quote
+                    if self.cur_char[0] != 0x022 {
+                        _tkn += std::str::from_utf8(&self.cur_char[..]).expect("Invalid utf8 char");
+                    }
+                }
+                Err(e) =>{
+                    eprintln!("ERROR\n{:?}", e);
+                    panic!("Encountered an error!");
+                }
+                _ => {
+                    panic!("How did this read more than one byte when the buffer is one byte!!!");
+                }
+            }
+        }
+
+        _tkn = String::from(_tkn.trim());
+        if _tkn.len() == 0 {
+            return;
+        } else {
+            self.do_token(_tkn, TokenType::Strn)
+        }
+        self.state = LexerState::StartState;
+    }
+
+
+    fn acquiring_token_bad(&mut self, already_read: u8) {
         // Because a character was already read, we need to take it into account before we read
         // more. This is added to the tkn buffer.
         let mut tkn = String::from(char::from(already_read));
@@ -213,17 +308,22 @@ impl Lexer {
             0x28_u8 => { // "("
                 self.state = LexerState::ParenPending;
             },
-            0x2E_u8 =>{ // "."
+            0x22_u8 => { // '"'
                 self.state = LexerState::AcquiringString;
             }
+            0x00_u8 => {
+                // only accessed on first entry.
+                let _ = self.file_hnd.read(&mut self.cur_char[..]);
+                self.do_start();
+            }
             _ => {
-                self.state = LexerState::AcquiringToken
+                self.state = LexerState::AcquiringToken;
             }
         }
     } // end do_start
 
     fn do_token(&mut self, s: String, t: TokenType) {
-        println!("Token found! {s}");
+        eprintln!("Token found! >{s}< of type {:?}",t);
             
         if self.token_list.contains_key(&s) {
             let _old = self.token_list.get_mut(&s).unwrap();
