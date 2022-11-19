@@ -1,5 +1,4 @@
-use std::{fs::File,path::Path, io::{prelude::*, BufReader, Error}, collections::hash_map};
-
+use std::{fs::File, io::prelude::Read};//io::prelude::*};
 
 #[derive(Debug, PartialEq)]
 pub enum TokenType {
@@ -12,6 +11,7 @@ pub enum TokenType {
 pub enum LexerError {
     FileError(std::io::Error),
 }
+
 #[derive(Debug)]
 pub struct Token{
     token_type: TokenType,
@@ -22,9 +22,7 @@ pub struct Token{
 pub struct Lexer {
     file_path: String,      // I am using a string because it is easier to implement in comparison
                             // to the path type. I could put in a box, but I've never done that.
-    //file_data: Vec<String>,
     file_hnd: File,
-    //token_list: Vec<Token>,
     token_list: std::collections::HashMap<String, Token>,
     state: LexerState,
     cur_char: [u8; 1]
@@ -42,26 +40,25 @@ enum LexerState {
     Done,
 }
 
-impl Lexer {
-    pub fn new(p: String) -> Result<Lexer, LexerError>{
-        // Open File. Clone prevents use after move
-        let fi = File::open(p.clone()).expect("File not found!");
-        // Create BufReader for reading the contents of the file
-        //let buf = BufReader::new(fi);
 
-        
+//-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
+impl Lexer {
+    pub fn new(p: String) -> Result<Lexer, std::io::Error>{
+        // Open File. Clone prevents use after move
+        let fi = File::open(p.clone())?;
 
         // Return the new struct
         Ok(Lexer{
             file_path: p,
             file_hnd: fi,
-            //token_list: Vec::new()
             token_list: std::collections::HashMap::new(),
             state: LexerState::StartState,
             cur_char: [255_u8]
         })
     }
 
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     pub fn do_lex(&mut self) {
         self.state = LexerState::StartState; 
 
@@ -85,23 +82,32 @@ impl Lexer {
         }
     }
 
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn slash_pending(&mut self) {
-        if self.cur_char[0] == 0x20_u8{
+        // read until <space>
+        if self.cur_char[0] == 0x20_u8 {
             self.state = LexerState::AcquiringSlash;
         } else {
             self.state = LexerState::AcquiringToken;
         }
     }
+
     
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn paren_pending(&mut self) {
-        if self.cur_char[0] == 0x20_u8{
+        // read until <space>
+        if self.cur_char[0] == 0x20_u8 {
             self.state = LexerState::AcquiringParen;
         } else {
             self.state = LexerState::AcquiringToken;
         }
     }
 
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn acquiring_slash(&mut self) {
+        // read until <CR>
         while self.cur_char[0] != 0x0A_u8 {
             match self.file_hnd.read(&mut self.cur_char[..]) {
                 Ok(a)  => {
@@ -112,13 +118,16 @@ impl Lexer {
                 },
                 Err(a) => {
                     eprintln!("{:?}", a);
-                    panic!("fuck!");
+                    panic!("Fatal error!");
                 }
             }
         }
     }
 
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn acquiring_paren(&mut self) {
+        // read until )
         while self.cur_char[0] != 0x29_u8 {
             match self.file_hnd.read(&mut self.cur_char[..]) {
                 Ok(a)  => {
@@ -129,7 +138,7 @@ impl Lexer {
                 },
                 Err(a) => {
                     eprintln!("{:?}", a);
-                    panic!("fuck!");
+                    panic!("AAAAAAAAHHHHHHHHHH!"); // After all, we are panicking ;)
                 }
             }
         }
@@ -137,6 +146,7 @@ impl Lexer {
     }
 
 
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn acquiring_token(&mut self, already_read: u8) {
         let mut _tkn = String::new();
         if already_read != 0x00_u8{
@@ -145,6 +155,7 @@ impl Lexer {
             _tkn += std::str::from_utf8(&_tmp[..]).expect("invalid character");
         }
         
+        // Read until <space> and <CR>
         while self.cur_char[0] != 0x20_u8 && self.cur_char[0] != 0x0a_u8  {
             match self.file_hnd.read(&mut self.cur_char[..]) {
                 Ok(0) => { // 0 bytes read if eof;
@@ -181,21 +192,19 @@ impl Lexer {
             self.state = LexerState::StartState;
             return;
         }
-    }
+    } // end acquiring_token
 
 
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn acquiring_string(&mut self, already_read: u8){
         let mut _tkn = String::new();
+        // don't add a null character to the beginning of a string
         if already_read != 0x00_u8{
             // Prepare to append the characters that were already read.
             let _tmp = [already_read, self.cur_char[0]];
             _tkn += std::str::from_utf8(&_tmp[..]).expect("invalid character");
         }
-        if already_read != 0x20_u8 && already_read != 0x00_u8{
-            println!("already read: {already_read}");
-            //_tkn += std::str::from_utf8(&self.cur_char[..]).expect("Invalid utf8 char");
-            let mut _tkn = String::from(char::from(already_read));
-        }
+        
         while self.cur_char[0] != 0x22_u8 {
             match self.file_hnd.read(&mut self.cur_char[..]) {
                 Ok(0) => {
@@ -226,82 +235,15 @@ impl Lexer {
             self.do_token(_tkn, TokenType::Strn)
         }
         self.state = LexerState::StartState;
-    }
+    } // end acquiring_string
 
 
-    fn acquiring_token_bad(&mut self, already_read: u8) {
-        // Because a character was already read, we need to take it into account before we read
-        // more. This is added to the tkn buffer.
-        let mut tkn = String::from(char::from(already_read));
-
-        if self.cur_char[0] == 0x22_u8 { self.state = LexerState::AcquiringString; }
-        while ((self.cur_char[0] != 0x20_u8 || self.cur_char[0] == 0x0A) && self.state != LexerState::AcquiringString) || (self.cur_char[0] != 0x22_u8 && self.state == LexerState::AcquiringString && tkn.len() > 1) {
-            eprint!("{}", self.cur_char[0] as char);
-            // handle the . token
-            if tkn.len() == 1 && self.state == LexerState::AcquiringString && self.cur_char[0] == 0x20_u8{
-                //tkn.push(char::from(0x2E));
-                break;
-            }
-
-            // append to string used for token
-            tkn += std::str::from_utf8(&self.cur_char[..]).expect("Failed to find a char!");
-
-            if tkn == String::from("Hello") { eprintln!("{:?}", self.state); }
-            // read from file and check for errors
-            match self.file_hnd.read(&mut self.cur_char[..]) {
-                Ok(a)  => {
-                    if a < 1 {
-                        break;
-                    }
-                },
-                Err(a) => {
-                    eprintln!("{:?}", a);
-                    panic!("fuck!");
-                }
-            }
-        }
-        
-        // Determine token type
-        eprintln!("Token:>{}<", tkn);
-        if tkn.len() == 0 {
-            return;
-        } else if self.state == LexerState::AcquiringString {
-            let stl = tkn.len(); // Second To Last
-            // One thing that I truly hate about rust is the constant String::froms I need to do :(
-            self.do_token(String::from(String::from(&tkn[1..stl]).trim()), TokenType::Strn)
-        } else if tkn.is_numeric() {
-            self.do_token(tkn, TokenType::Nmbr)
-        } else {
-            self.do_token(String::from(tkn.trim()), TokenType::Word) 
-        }
-        //} else if tkn.is_numeric() {
-            //self.do_token(tkn, TokenType::Nmbr) 
-        //} else if tkn.chars().nth(0).unwrap() == '.' {
-            //// filter out the `"`s
-            //let stl = tkn.len(); // Second To Last
-            //if stl == 1 {
-                //self.do_token(String::from(tkn.trim()), TokenType::Word);
-            //} else {
-                //// One thing that I truly hate about rust is the constant String::froms I need to
-                //// do :(
-                //self.do_token(String::from(String::from(&tkn[1..stl]).trim()), TokenType::Strn)
-            //}
-        //} else {
-            //self.do_token(String::from(tkn.trim()), TokenType::Word) 
-        //}
-        self.state = LexerState::StartState;
-    }
-
-
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn do_start(&mut self) {
         match self.cur_char[0] {
             // I am forced to use hex because of rust using utf8 instead of 
-            0x20_u8 => { // " "
-                // do nothing
-            },
-            0x0A_u8 => {
-                // do nothing
-            }
+            0x20_u8 => { /* <space> */ }, // do nothing
+            0x0A_u8 => { /* <CR> */ }, // Do nothing
             0x55_u8 => { // "\"
                 self.state = LexerState::SlashPending;
             },
@@ -313,7 +255,7 @@ impl Lexer {
             }
             0x00_u8 => {
                 // only accessed on first entry.
-                let _ = self.file_hnd.read(&mut self.cur_char[..]);
+                //let _ = self.file_hnd.read(&mut self.cur_char[..]);
                 self.do_start();
             }
             _ => {
@@ -322,9 +264,9 @@ impl Lexer {
         }
     } // end do_start
 
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     fn do_token(&mut self, s: String, t: TokenType) {
-        eprintln!("Token found! >{s}< of type {:?}",t);
-            
         if self.token_list.contains_key(&s) {
             let _old = self.token_list.get_mut(&s).unwrap();
             _old.reference_count+=1;
@@ -333,15 +275,17 @@ impl Lexer {
         }
     }
 
-    // we are not editing anything here, so we can just leave it as a normal self reference
+
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
     pub fn print(&self) {
         println!("{:#?}", self.token_list)
-
     }
+} // impl lexer
 
-}
 
-
+    //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=//
+// Here, I am extending the String "object" and allowing me to check if the entire string is
+// fully numeric.
 trait IsNumeric {
     fn is_numeric(&self) -> bool;
 }
