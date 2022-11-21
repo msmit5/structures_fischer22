@@ -1,13 +1,15 @@
-import Data.Either
+import Text.Read
 
 main = do
   putStrLn "Please input the diameter of a circle"
-  diaUIO <- readLn :: IO Double
-  let dia = diaUIO
-  putStrLn $ "You Input: " ++ (show dia)
+  putStr "> "
+  diaAsStr <- getLine
 
-  let res = either lCase rCase (circleHandler dia)
-  putStrLn res
+  case readMaybe diaAsStr :: Maybe Double of 
+    Just x -> do
+      putStrLn $ "You input: " ++ (show x) ++ "\n"
+      putStrLn $ either lCase rCase (circleHandler x)
+    Nothing -> putStrLn "Invalid Input"
 
 
 lCase :: [Char] -> [Char]
@@ -15,7 +17,7 @@ lCase l  = "ERROR:\n" ++ l
 
 rCase :: [Double] -> [Char]
 rCase r = do
-  printStrResults $ zip ["Radius: ", "Circumfrence: ", "Area: "] r
+  printStrResults $ zip ["Radius:       ", "Circumfrence: ", "Area:         "] r
 
 printStrResults x = printStrResults' x ""
 
