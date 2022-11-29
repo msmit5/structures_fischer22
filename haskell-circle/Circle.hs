@@ -1,4 +1,5 @@
 import Text.Read
+import Text.Printf
 
 main = do
   putStrLn "Please input the diameter of a circle"
@@ -25,7 +26,11 @@ printStrResults' dat cur
   | dat == [] = cur
   | otherwise = do
     let x = head dat
-    printStrResults' (tail dat) (cur ++ ((fst x) ++ (show $ snd x)) ++ "\n")
+    --printStrResults' (tail dat) (cur ++ ((fst x) ++ (show $ snd x)) ++ "\n")
+    printStrResults' (tail dat) (cur ++ ((fst x) ++ (trunc (snd x)) ++ "\n"))
+
+trunc x = printf "%.4f" x
+
 
 circleHandler :: Double -> Either [Char] [Double]
 circleHandler dia
